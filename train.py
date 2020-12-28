@@ -1,20 +1,33 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
+  
+seed_value= 0
+import os
+os.environ['PYTHONHASHSEED']=str(seed_value)
+import numpy as np
+np.random.seed(seed_value)
+import random
+random.seed(seed_value)
+import tensorflow as tf
+tf.compat.v1.set_random_seed(seed_value)
+
 import math
 import time
-from absl import flags
-import absl.logging as _logging  # pylint: disable=unused-import
-import tensorflow as tf
+from absl import flags, app
 from tensorflow.compat.v1.gfile import Exists as exists
 import model
 import data_utils
-# import tpu_estimator
+import datetime
+import logging
+from selftf.lib.mltuner.mltuner_util import MLTunerUtil
 
-import numpy as np
-from time import sleep
+logging.basicConfig(level=logging.DEBUG,
+                    format='%(asctime)s %(name)-12s %(levelname)-8s %(message)s',
+                    datefmt='%m-%d %H:%M',
+                    )
 
-
+mltunerUtil = MLTunerUtil()
 
 # init flag
 flags.DEFINE_enum("init", default="normal",
@@ -30,9 +43,9 @@ flags.DEFINE_bool("proj_share_all_but_first", default=False,
       help="True to share all but first projs, False not to share.")
 
 # Model paramenters
-flags.DEFINE_integer("tgt_len", default=128,
+flags.DEFINE_integer("tgt_len", default=768,
       help="Number of steps to predict")
-flags.DEFINE_integer("mem_len", default=3800,
+flags.DEFINE_integer("mem_len", default=768,
       help="Number of steps to cache")
 flags.DEFINE_bool("same_length", default=True,
       help="Same length attention")
@@ -62,8 +75,6 @@ flags.DEFINE_bool("tie_weight", default=True,
       help="Tie embedding and softmax weight.")
 flags.DEFINE_integer("div_val", default=1,
       help="Divide the embedding size by this val for each bin")
-flags.DEFINE_bool("proj_share_all_but_first", default=False,
-      help="True to share all but first projs, False not to share.")
 flags.DEFINE_bool("proj_same_dim", default=True,
       help="Project the bin with the same dimension.")
 
@@ -107,6 +118,8 @@ flags.DEFINE_integer("num_hosts", default=1,
 flags.DEFINE_integer("num_core_per_host", default=8,
       help="number of cores per host")
 
+FLAGS = flags.FLAGS
+
 def get_model_fn(n_token, cutoffs, train_bin_sizes, eval_bin_sizes):
   def model_fn(features, labels, mode, params):
     is_training = (mode == tf.estimator.ModeKeys.TRAIN)
@@ -114,7 +127,8 @@ def get_model_fn(n_token, cutoffs, train_bin_sizes, eval_bin_sizes):
 
     batch_size = params["batch_size"]
 
-    mems = params["cache"]
+    # mems = params["cache"]
+    mems = None
     inp = tf.transpose(features["inputs"], [1, 0])
     tgt = tf.transpose(features["labels"], [1, 0])
 
@@ -135,15 +149,15 @@ def get_model_fn(n_token, cutoffs, train_bin_sizes, eval_bin_sizes):
       inp_perms, tgt_perms, head_tgt = None, None, None
 
     if FLAGS.init == "uniform":
-      initializer = tf.initializers.random_uniform(
+      initializer = tf.keras.initializers.RandomUniform(
           minval=-FLAGS.init_range,
           maxval=FLAGS.init_range,
           seed=None)
     elif FLAGS.init == "normal":
-      initializer = tf.initializers.random_normal(
+      initializer = tf.keras.initializers.RandomNormal(
           stddev=FLAGS.init_std,
           seed=None)
-      proj_initializer = tf.initializers.random_normal(
+      proj_initializer = tf.keras.initializers.RandomNormal(
           stddev=FLAGS.proj_init_std,
           seed=None)
 
@@ -152,8 +166,8 @@ def get_model_fn(n_token, cutoffs, train_bin_sizes, eval_bin_sizes):
       for i in range(1, len(tie_projs)):
         tie_projs[i] = True
 
-    tf.logging.info("Vocab size : {}".format(n_token))
-    tf.logging.info("Batch size : {}".format(batch_size))
+    tf.compat.v1.logging.info("Vocab size : {}".format(n_token))
+    tf.compat.v1.logging.info("Batch size : {}".format(batch_size))
 
     loss, new_mems = model.transformer(
         dec_inp=inp,
@@ -191,7 +205,7 @@ def get_model_fn(n_token, cutoffs, train_bin_sizes, eval_bin_sizes):
           total_loss = tf.contrib.tpu.cross_replica_sum(total_loss) \
                      / FLAGS.num_hosts / FLAGS.num_core_per_host
       metric_loss = tf.tile(tf.reshape(total_loss, [1, 1]), [batch_size, 1])
-      eval_spec = tf.contrib.tpu.TPUEstimatorSpec(
+      eval_spec = tf.compat.v1.estimator.tpu.TPUEstimatorSpec(
           mode=mode,
           loss=total_loss,
           eval_metrics=(metric_fn, [metric_loss]))
@@ -201,18 +215,18 @@ def get_model_fn(n_token, cutoffs, train_bin_sizes, eval_bin_sizes):
       return eval_spec
 
     # Configuring the optimization step.
-    global_step = tf.train.get_global_step()
+    global_step = tf.compat.v1.train.get_global_step()
 
     # increase the learning rate linearly
     if FLAGS.warmup_steps > 0:
       warmup_lr = tf.to_float(global_step) / tf.to_float(FLAGS.warmup_steps) \
-                  * FLAGS.learning_rate
+                  * mltunerUtil.get_learning_rate()
     else:
       warmup_lr = 0.0
 
     # number of parameters
-    num_params = np.sum([np.prod(v.shape) for v in tf.trainable_variables()])
-    tf.logging.info("#params: {}".format(num_params))
+    num_params = np.sum([np.prod(v.shape) for v in tf.compat.v1.trainable_variables()])
+    tf.compat.v1.logging.info("#params: {}".format(num_params))
 
     # format_str = '{{:<{0}s}}\t{{}}'.format(
     #     max([len(v.name) for v in tf.trainable_variables()]))
@@ -221,8 +235,8 @@ def get_model_fn(n_token, cutoffs, train_bin_sizes, eval_bin_sizes):
 
 
     # decay the learning rate using the cosine schedule
-    decay_lr = tf.train.cosine_decay(
-        FLAGS.learning_rate,
+    decay_lr = tf.compat.v1.train.cosine_decay(
+        mltunerUtil.get_learning_rate(),
         global_step=global_step-FLAGS.warmup_steps,
         decay_steps=FLAGS.train_steps-FLAGS.warmup_steps,
         alpha=FLAGS.min_lr_ratio)
@@ -235,16 +249,16 @@ def get_model_fn(n_token, cutoffs, train_bin_sizes, eval_bin_sizes):
           tf.train.AdamOptimizer(learning_rate=learning_rate))
       #GradientDescentOptimizer
     else:
-      optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
+      optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=learning_rate)
 
     grads_and_vars = optimizer.compute_gradients(total_loss)
     gradients, variables = zip(*grads_and_vars)
     clipped, _ = tf.clip_by_global_norm(gradients, FLAGS.clip)
     train_op = optimizer.apply_gradients(
-        zip(clipped, variables), global_step=tf.train.get_global_step())
+        zip(clipped, variables), global_step=tf.compat.v1.train.get_global_step())
 
     # Constucting TPUEstimatorSpec with cache.
-    train_spec = tf.compat.v1.tpu.TPUEstimatorSpec(
+    train_spec = tf.compat.v1.estimator.tpu.TPUEstimatorSpec(
         mode=mode, loss=total_loss, train_op=train_op)
 
     if FLAGS.mem_len < FLAGS.tgt_len:
@@ -256,8 +270,12 @@ def get_model_fn(n_token, cutoffs, train_bin_sizes, eval_bin_sizes):
   return model_fn
 
 
-def main(unused_argv):
-  tf.logging.set_verbosity(tf.logging.INFO)
+def main(argv):
+  TRAIN_BATCH_SIZE = mltunerUtil.get_batch_size()
+  LEARNING_RATE = mltunerUtil.get_learning_rate()
+  model_dir = "{}/{}".format("/opt/tftuner", mltunerUtil.get_job_id())
+
+  tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.INFO)
 
   # Get corpus info
   corpus_info = data_utils.get_corpus_info(FLAGS.corpus_info_path)
@@ -267,7 +285,7 @@ def main(unused_argv):
   train_input_fn, train_record_info = data_utils.get_input_fn(
         record_info_dir=FLAGS.record_info_dir,
         split="train",
-        per_host_bsz=FLAGS.train_batch_size // FLAGS.num_hosts,
+        per_host_bsz=TRAIN_BATCH_SIZE // FLAGS.num_hosts,
         tgt_len=FLAGS.tgt_len,
         num_core_per_host=FLAGS.num_core_per_host,
         num_hosts=FLAGS.num_hosts,
@@ -289,10 +307,12 @@ def main(unused_argv):
 
   model_fn = get_model_fn(n_token, cutoffs, train_bin_sizes, eval_bin_sizes)
 
+  strategy = tf.distribute.experimental.ParameterServerStrategy()
+  session_config = mltunerUtil.get_tf_session_config()
   config = tf.compat.v1.estimator.tpu.RunConfig(
-      model_dir=FLAGS.model_dir,
-      session_config=tf.ConfigProto(
-          allow_soft_placement=True, log_device_placement=True),
+      train_distribute=strategy,
+      model_dir=model_dir,
+      session_config=session_config,
       save_checkpoints_secs=None,
       save_checkpoints_steps=None
   )
@@ -301,10 +321,27 @@ def main(unused_argv):
       use_tpu=False, #If False training will fall on CPU or GPU, depending on what is available 
       model_fn=model_fn,
       config=config,
-      train_batch_size=FLAGS.train_batch_size,
-      eval_batch_size=FLAGS.eval_batch_size)
+      train_batch_size=TRAIN_BATCH_SIZE,
+      eval_batch_size=FLAGS.eval_batch_size,
+      params={"data_dir":FLAGS.data_dir, "track_mean":False})
 
-  train_spec = tf.estimator.TrainSpec(input_fn=train_input_fn, max_steps=FLAGS.train_steps)
+
+  class LoggerHook(tf.estimator.SessionRunHook):
+    """Logs loss and runtime."""
+
+    def __init__(self):
+        self.last_run_timestamp = time.time()
+    
+    def after_run(self, run_context, run_values):
+        session: tf.Session = run_context.session
+        loss, step = session.run([tf.compat.v1.get_collection("losses")[0],
+                                  tf.compat.v1.get_collection("global_step_read_op_cache")[0]])
+        logging.debug("step:{} loss:{}".format(step, loss))
+        mltunerUtil.report_iter_loss(step, loss,
+                                     time.time() - self.last_run_timestamp)
+        self.last_run_timestamp = time.time()
+
+  train_spec = tf.estimator.TrainSpec(input_fn=train_input_fn, max_steps=FLAGS.train_steps,hooks=[LoggerHook()])
   eval_spec = tf.estimator.EvalSpec(input_fn=eval_input_fn)
 
   if not (mltunerUtil.is_chief() or mltunerUtil.is_ps()):
@@ -316,4 +353,4 @@ def main(unused_argv):
 
 
 if __name__ == "__main__":
-  tf.app.run()
+  app.run(main)
