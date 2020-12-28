@@ -14,15 +14,15 @@ def positionwise_FF(inp, d_model, d_inner, dropout, kernel_initializer,
                     scope='ff', is_training=True):
   output = inp
   with tf.compat.v1.variable_scope(scope):
-    output = tf.layers.dense(inp, d_inner, activation=tf.nn.relu,
+    output = tf.compat.v1.layers.dense(inp, d_inner, activation=tf.nn.relu,
                              kernel_initializer=kernel_initializer,
                              name='layer_1')
-    output = tf.layers.dropout(output, dropout, training=is_training,
+    output = tf.compat.v1.layers.dropout(output, dropout, training=is_training,
                                name='drop_1')
-    output = tf.layers.dense(output, d_model,
+    output = tf.compat.v1.layers.dense(output, d_model,
                              kernel_initializer=kernel_initializer,
                              name='layer_2')
-    output = tf.layers.dropout(output, dropout, training=is_training,
+    output = tf.compat.v1.layers.dropout(output, dropout, training=is_training,
                                name='drop_2')
     output = tf.contrib.layers.layer_norm(output + inp, begin_norm_axis=-1)
   return output
@@ -50,9 +50,9 @@ def rel_multihead_attn(w, r, r_w_bias, r_r_bias, attn_mask, mems, d_model,
 
     cat = tf.concat([mems, w],
                     0) if mems is not None and mems.shape.ndims > 1 else w
-    w_heads = tf.layers.dense(cat, 3 * n_head * d_head, use_bias=False,
+    w_heads = tf.compat.v1.layers.dense(cat, 3 * n_head * d_head, use_bias=False,
                               kernel_initializer=kernel_initializer, name='qkv')
-    r_head_k = tf.layers.dense(r, n_head * d_head, use_bias=False,
+    r_head_k = tf.compat.v1.layers.dense(r, n_head * d_head, use_bias=False,
                                kernel_initializer=kernel_initializer, name='r')
 
     w_head_q, w_head_k, w_head_v = tf.split(w_heads, 3, -1)
@@ -78,15 +78,15 @@ def rel_multihead_attn(w, r, r_w_bias, r_r_bias, attn_mask, mems, d_model,
     attn_score = attn_score * (1 - attn_mask_t) - 1e30 * attn_mask_t
 
     attn_prob = tf.nn.softmax(attn_score, 1)
-    attn_prob = tf.layers.dropout(attn_prob, dropatt, training=is_training)
+    attn_prob = tf.compat.v1.layers.dropout(attn_prob, dropatt, training=is_training)
 
     attn_vec = tf.einsum('ijbn,jbnd->ibnd', attn_prob, w_head_v)
     size_t = tf.shape(attn_vec)
     attn_vec = tf.reshape(attn_vec, [size_t[0], size_t[1], n_head * d_head])
 
-    attn_out = tf.layers.dense(attn_vec, d_model, use_bias=False,
+    attn_out = tf.compat.v1.layers.dense(attn_vec, d_model, use_bias=False,
                                kernel_initializer=kernel_initializer, name='o')
-    attn_out = tf.layers.dropout(attn_out, dropout, training=is_training)
+    attn_out = tf.compat.v1.layers.dropout(attn_out, dropout, training=is_training)
 
     output = tf.contrib.layers.layer_norm(attn_out + w, begin_norm_axis=-1)
   return output
