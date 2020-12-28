@@ -1,27 +1,18 @@
-#!/bin/bash
+echo "=== Acquiring datasets ==="
+echo "---"
 
-URL=http://curtis.ml.cmu.edu/datasets/pretrained_xl
+mkdir -p data
+cd data
 
-DATA_ROOT=./
+echo "- Downloading enwik8 (Character)"
+if [[ ! -d 'enwik8' ]]; then
+    mkdir -p enwik8
+    cd enwik8
+    wget --continue http://mattmahoney.net/dc/enwik8.zip
+    wget https://raw.githubusercontent.com/salesforce/awd-lstm-lm/master/data/enwik8/prep_enwik8.py
+    python3 prep_enwik8.py
+    cd ..
+fi
 
-function download () {
-  fileurl=${1}
-  filename=${fileurl##*/}
-  if [ ! -f ${filename} ]; then
-    echo ">>> Download '${filename}' from '${fileurl}'."
-    wget --quiet ${fileurl}
-  else
-    echo "*** File '${filename}' exists. Skip."
-  fi
-}
-
-cd $DATA_ROOT
-mkdir -p pretrained_xl && cd pretrained_xl
-
-# enwik8
-mkdir -p tf_enwik8 && cd tf_enwik8
-
-mkdir -p data && cd data
-download ${URL}/tf_enwiki8/data/cache.pkl
-download ${URL}/tf_enwiki8/data/corpus-info.json
-cd ..
+echo "---"
+echo "Happy language modeling :)"
