@@ -124,8 +124,11 @@ def get_model_fn(n_token, cutoffs, train_bin_sizes, eval_bin_sizes):
   def model_fn(features, labels, mode, params):
     is_training = (mode == tf.estimator.ModeKeys.TRAIN)
 
-
-    batch_size = params["batch_size"]
+    if is_training:
+        batch_size = FLAGS.train_batch_size
+    else:
+        batch_size = FLAGS.eval_batch_size
+    # batch_size = params["batch_size"]
 
     # mems = params["cache"]
     mems = None
