@@ -285,7 +285,7 @@ def main(argv):
   train_input_fn, train_record_info = data_utils.get_input_fn(
         record_info_dir=FLAGS.record_info_dir,
         split="train",
-        per_host_bsz=TRAIN_BATCH_SIZE // FLAGS.num_hosts,
+        per_host_bsz=FLAGS.train_batch_size // FLAGS.num_hosts,
         tgt_len=FLAGS.tgt_len,
         num_core_per_host=FLAGS.num_core_per_host,
         num_hosts=FLAGS.num_hosts,
@@ -321,7 +321,7 @@ def main(argv):
       use_tpu=False, #If False training will fall on CPU or GPU, depending on what is available 
       model_fn=model_fn,
       config=config,
-      train_batch_size=TRAIN_BATCH_SIZE,
+      train_batch_size=FLAGS.train_batch_size,
       eval_batch_size=FLAGS.eval_batch_size,
       params={"data_dir":FLAGS.data_dir, "track_mean":False})
 
